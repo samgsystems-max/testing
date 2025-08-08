@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Bomb Casino — Mines Game (Client-side)</title>
+  <style>
+    :root{--bg:#0f1720;--card:#111827;--accent:#10b981;--danger:#ef4444;--muted:#94a3b8}
+    *{box-sizing:border-box;font-family:Inter,Segoe UI,Roboto,Arial,sans-serif}
+    body{margin:0;background:linear-gradient(180deg,#061021,#091426);color:#e6eef6;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+    .app{width:980px;max-width:100%;display:grid;grid-template-columns:360px 1fr;gap:20px}
+    .panel{background:var(--card);border-radius:12px;padding:18px;box-shadow:0 6px 24px rgba(2,6,23,.6)}
+    h1{margin:0 0 12px;font-size:20px}
+
+    .balance{font-size:18px;margin-bottom:8px}
+    label{display:block;font-size:12px;color:var(--muted);margin-top:10px}
+    input[type=number],select{width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.06);background:transparent;color:inherit}
+    button{cursor:pointer;padding:10px 12px;border-radius:8px;border:0;background:var(--accent);color:#062018;font-weight:600}
+    button.ghost{background:transparent;border:1px solid rgba(255,255,255,.06);color:inherit}
+    .controls{display:flex;gap:8px;margin-top:12px}
+
+    .grid-wrap{display:flex;flex-direction:column;gap:12px}
+    .info-row{display:flex;gap:12px;align-items:center}
+    .pill{background:rgba(255,255,255,.03);padding:8px 10px;border-radius:10px;font-weight:600}
+    .board{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding:12px;background:rgba(255,255,255,.02);border-radius:10px}
+    .tile{aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.02);border-radius:8px;cursor:pointer;user-select:none;font-weight:700;font-size:18px}
+    .tile.revealed{background:rgba(255,255,255,.04);cursor:default}
+    .tile.bomb{background:linear-gradient(90deg,rgba(239,68,68,.14),rgba(239,68,68,.06));color:var(--danger)}
+    .tile.safe{color:var(--accent)}
+    .log{max-height:220px;overflow:auto;padding:8px;background:rgba(255,255,255,.02);border-radius:8px;font-size:13px}
+    footer{font-size:12px;color:var(--muted);text-align:center;margin-top:10px}
+
+    @media(max-width:900px){.app{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="panel">
+      <h1>Bomb Casino — Play</h1>
+      <div class="balance">Balance: <span id="balance">100.00</span> ⬩</div>
+
+      <label>Bet amount</label>
+      <input id="bet" type="number" min="0.01" step="0.01" value="1.00">
+
+      <label>Bombs</label>
+      <select id="bombs">
+        <!-- 1 to 24 for 5x5 grid (25 tiles) -->
+      </select>
+
+      <label>Pick mode</label>
+      <div style="display:flex;gap:8px">
+        <button id="startBtn">Start Round</button>
+        <button id="randomPick" class="ghost">Pick random tile</button>
+      </div>
+
+      <div class="controls">
+        <button id="cashout" class="ghost">Cashout</button>
+        <button id="reset" class="ghost">Reset</button>
+      </div>
+
+      <label>Round info</label>
+      <div class="info-row">
+        <div class="pill">Tiles: <span id="tilesTotal">25</span></div>
+        <div class="pill">Bombs: <span id="bombCount">1</span></div>
+        <div class="pill">Revealed: <span id="revealedCount">0</span></div>
+        <div class="pill">Multiplier: <span id="multiplier">1.00x</span></div>
+        <div class="pill">Potential: <span id="potential">0.00</span></div>
+      </div>
+
+      <label>Game log</label>
+      <div class="log" id="log"></div>
+
+      <footer>Client-side simulation for learning. Uses cryptographic randomness (no backend).</footer>
+    </div>
+
+    <div class="panel grid-wrap">
+      <h1>Board</h1>
+      <div class="board" id="board"></div>
+    </div>
+  </div>
+
+<script>
+// --- Config and state ---
+const tiles = 25;
+const balanceEl = document.getElementById('balance');
+const betEl = document.getElementById('bet');
+const bombsEl = document.getElementById('bombs');
+const boardEl = document.getElementById('board');
+const startBtn = document.getElementById('startBtn');
+const randomPickBtn = document.getElementById('randomPick');
+const cashoutBtn = document.getElementById('cashout');
+const resetBtn = document.getElementById('reset');
+const tilesTotalEl = document.getElementById('tilesTotal');
+const bombCountEl = document.getElementById('bombCount');
+const revealedCountEl = document.getElementById('revealedCount');
+const multiplierEl = document.getElementById('multiplier');
+const potentialEl = document.getElementById('potential');
+const logEl = document.getElementById('log');
+
+tilesTotalEl.textContent = tiles;
+
+for(let i=1;i<tiles;i++){
+  // fill bombs select with 1..24
+}
+for(let i=1;i<tiles;i++){
+  const opt = document.createElement('option');opt.value=i;opt.textContent=i;bombsEl.appendChild(opt);
+}
+
+// Use cents stored as number to avoid float rounding issues
+let state = {
+  balance: 100.00,
+  roundActive: false,
+  bet: 1.00,
+  bombs: 1,
+  bombPositions: [],
+  revealed: new Set(),
+  multiplier: 1.0,
+  potential: 0.0,
+  tilesRemaining: tiles
+};
+
+function log(msg){
+  const p = document.createElement('div');p.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;logEl.prepend(p);
+}
+
+// Secure random integer in [0, n-1]
+function randInt(n){
+  const a = new Uint32Array(1);
+  window.crypto.getRandomValues(a);
+  return a[0] % n;
+}
+
+function placeBombs(bombs){
+  const positions = new Set();
+  while(positions.size < bombs){
+    positions.add(randInt(tiles));
+  }
+  return [...positions];
+}
+
+function startRound(){
+  if(state.roundActive){log('Round already active');return}
+  const bet = parseFloat(betEl.value);
+  const bombs = parseInt(bombsEl.value,10);
+  if(Number.isNaN(bet) || bet<=0){alert('Enter a valid bet');return}
+  if(bet > state.balance){alert('Insufficient balance');return}
+  state.bet = roundTwo(bet);
+  state.bombs = bombs;
+  state.bombPositions = placeBombs(bombs);
+  state.revealed = new Set();
+  state.roundActive = true;
+  state.multiplier = 1.0;
+  state.tilesRemaining = tiles;
+  state.potential = 0.0;
+  state.balance = roundTwo(state.balance - state.bet);
+  updateUI();
+  renderBoard();
+  log(`Started round — Bet ${state.bet.toFixed(2)}, Bombs ${state.bombs}.`);
+}
+
+function renderBoard(){
+  boardEl.innerHTML = '';
+  for(let i=0;i<tiles;i++){
+    const cell = document.createElement('div');
+    cell.className = 'tile';
+    cell.dataset.idx = i;
+    if(state.revealed.has(i)){
+      cell.classList.add('revealed');
+      if(state.bombPositions.includes(i)){
+        cell.classList.add('bomb');cell.textContent = '💣';
+      } else {
+        cell.classList.add('safe');cell.textContent = '💎';
+      }
+    }
+    cell.addEventListener('click',()=>onPick(i));
+    boardEl.appendChild(cell);
+  }
+}
+
+function onPick(i){
+  if(!state.roundActive){log('No active round — press Start Round');return}
+  if(state.revealed.has(i)){return}
+  state.revealed.add(i);
+  if(state.bombPositions.includes(i)){
+    // hit bomb -> lose round
+    state.roundActive = false;
+    revealAll();
+    updateUI();
+    log(`BOOM! You hit a bomb. Lost ${state.bet.toFixed(2)}.`);
+    return;
+  } else {
+    // safe reveal -> update multiplier
+    state.tilesRemaining--;
+    updateMultiplier();
+    updatePotential();
+    renderBoard();
+    updateUI();
+    log(`Safe pick! Multiplier now ${state.multiplier.toFixed(4)}x — Potential ${state.potential.toFixed(2)}.`);
+  }
+}
+
+function revealAll(){
+  // reveal every tile
+  for(let i=0;i<tiles;i++) state.revealed.add(i);
+  renderBoard();
+}
+
+function updateMultiplier(){
+  // compute incremental multiplier as product of survival odds per safe pick.
+  // We'll compute multiplier as product over k=0..(revealedSafes-1) of tiles/(tiles - bombs - k)
+  const revealedSafeCount = state.revealed.size - state.bombPositions.filter(p=>state.revealed.has(p)).length;
+  let m = 1.0;
+  for(let k=0;k<revealedSafeCount;k++){
+    m *= tiles / (tiles - state.bombs - k);
+  }
+  // Add a small house edge (1.02) to slightly reduce payouts.
+  m *= 0.99;
+  state.multiplier = m;
+}
+
+function updatePotential(){
+  state.potential = roundTwo(state.bet * state.multiplier);
+}
+
+function cashout(){
+  if(!state.roundActive){log('Nothing to cashout');return}
+  // cashout current potential
+  updateMultiplier();updatePotential();
+  const win = state.potential;
+  state.balance = roundTwo(state.balance + win);
+  state.roundActive = false;
+  revealAll();
+  updateUI();
+  log(`Cashed out ${win.toFixed(2)} — New balance ${state.balance.toFixed(2)}.`);
+}
+
+function pickRandom(){
+  if(!state.roundActive){log('No active round');return}
+  // choose a random non-revealed tile
+  const choices = [];
+  for(let i=0;i<tiles;i++) if(!state.revealed.has(i)) choices.push(i);
+  if(choices.length===0) return;
+  const idx = choices[randInt(choices.length)];
+  onPick(idx);
+}
+
+function resetGame(){
+  if(state.roundActive){if(!confirm('A round is active — reset will forfeit it. Continue?')) return}
+  state = {
+    balance: state.balance,
+    roundActive:false,
+    bet:parseFloat(betEl.value)||1.00,
+    bombs:parseInt(bombsEl.value)||1,
+    bombPositions:[],revealed:new Set(),multiplier:1.0,potential:0.0,tilesRemaining:tiles
+  };
+  updateUI();renderBoard();log('Reset UI');
+}
+
+function updateUI(){
+  balanceEl.textContent = state.balance.toFixed(2);
+  bombCountEl.textContent = state.bombs;
+  revealedCountEl.textContent = state.revealed.size;
+  multiplierEl.textContent = state.multiplier.toFixed(4) + 'x';
+  potentialEl.textContent = state.potential.toFixed(2);
+  // buttons
+  startBtn.disabled = state.roundActive;
+  cashoutBtn.disabled = !state.roundActive;
+}
+
+function roundTwo(v){return Math.round(v*100)/100}
+
+// --- Event listeners ---
+startBtn.addEventListener('click',startRound);
+randomPickBtn.addEventListener('click',pickRandom);
+cashoutBtn.addEventListener('click',cashout);
+resetBtn.addEventListener('click',resetGame);
+
+// init
+renderBoard();updateUI();
+// seed log
+log('Welcome — set a bet and number of bombs, then Start Round.');
+</script>
+</body>
+</html>
