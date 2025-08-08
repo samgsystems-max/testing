@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mini Casino — Bomb Casino + Plinko</title>
+  <style>
+    :root{--bg:#071023;--card:#0f1720;--accent:#10b981;--danger:#ef4444;--muted:#94a3b8}
+    *{box-sizing:border-box;font-family:Inter,Segoe UI,Roboto,Arial,sans-serif}
+    body{margin:0;background:linear-gradient(180deg,#061021,#091426);color:#e6eef6;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+    .container{width:1100px;max-width:100%;display:grid;grid-template-columns:360px 1fr;gap:20px}
+    .panel{background:var(--card);border-radius:12px;padding:18px;box-shadow:0 6px 24px rgba(2,6,23,.6)}
+    h1{margin:0 0 12px;font-size:20px}
+    .muted{color:var(--muted);font-size:13px}
+    input[type=text],input[type=number],select{width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.06);background:transparent;color:inherit}
+    button{cursor:pointer;padding:10px 12px;border-radius:8px;border:0;background:var(--accent);color:#062018;font-weight:600}
+    button.ghost{background:transparent;border:1px solid rgba(255,255,255,.06);color:inherit}
+    .controls{display:flex;gap:8px;margin-top:12px}
+    .board{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding:12px;background:rgba(255,255,255,.02);border-radius:10px;min-height:420px}
+    .tile{aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.02);border-radius:8px;cursor:pointer;user-select:none;font-weight:700;font-size:18px}
+    .tile.revealed{background:rgba(255,255,255,.04);cursor:default}
+    .tile.bomb{background:linear-gradient(90deg,rgba(239,68,68,.14),rgba(239,68,68,.06));color:var(--danger)}
+    .tile.safe{color:var(--accent)}
+    .log{max-height:220px;overflow:auto;padding:8px;background:rgba(255,255,255,.02);border-radius:8px;font-size:13px}
+    .lobby{display:flex;flex-direction:column;gap:12px}
+    .games{display:flex;gap:12px;flex-wrap:wrap}
+    .game-card{flex:1 1 140px;padding:12px;border-radius:10px;background:rgba(255,255,255,.02);text-align:center;cursor:pointer}
+    .topbar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}
+    .center{display:flex;align-items:center;justify-content:center;flex-direction:column}
+    canvas{background:linear-gradient(180deg,#071428,#041023);border-radius:10px;display:block;margin:0 auto;box-shadow:0 8px 30px rgba(0,0,0,.6)}
+    .back{background:transparent;border:1px solid rgba(255,255,255,.06);color:inherit;padding:8px;border-radius:8px}
+    footer{font-size:12px;color:var(--muted);text-align:center;margin-top:10px}
+    @media(max-width:1000px){.container{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="panel" id="leftPanel">
+      <div class="topbar">
+        <div>
+          <div class="muted">Player</div>
+          <div><strong id="playerName">Guest</strong></div>
+        </div>
+        <div style="text-align:right">
+          <div class="muted">Balance</div>
+          <div><strong id="balance">100.00</strong> ⬩</div>
+        </div>
+      </div>
+
+      <div id="leftContent">
+        <!-- dynamic left content -->
+      </div>
+
+      <div style="margin-top:12px;display:flex;gap:8px;">
+        <button id="goLobby" class="ghost">Lobby</button>
+        <button id="downloadBtn" class="ghost">Download HTML</button>
+      </div>
+
+      <label style="margin-top:10px">Game log</label>
+      <div class="log" id="log"></div>
+      <footer>Client-side demo. Share the HTML file with friends.</footer>
+    </div>
+
+    <div class="panel" id="rightPanel">
+      <div id="mainContent">
+        <!-- dynamic game area -->
+      </div>
+    </div>
+  </div>
+
+<script>
+// ----------------- Utilities & State -----------------
+const tiles = 25;
+const state = {
+  nickname: localStorage.getItem('casino_nick') || '',
+  balance: parseFloat(localStorage.getItem('casino_bal') || '100.00'),
+  currentView: 'signup', // signup, lobby, bomb, plinko
+  bombState: null,
+  plinkoState: null
+};
+
+const el = (id)=>document.getElementById(id);
+const logEl = ()=>document.getElementById('log');
+function log(msg){ const p=document.createElement('div');p.textContent=\`[\${new Date().toLocaleTimeString()}] \${msg}\`; logEl().prepend(p); }
+
+function saveState(){ localStorage.setItem('casino_nick', state.nickname||''); localStorage.setItem('casino_bal', state.balance.toFixed(2)); }
+function randInt(n){ const a=new Uint32Array(1);window.crypto.getRandomValues(a); return a[0] % n; }
+
+// ----------------- Initial UI -----------------
+document.getElementById('goLobby').addEventListener('click', ()=>showView('lobby'));
+document.getElementById('downloadBtn').addEventListener('click', ()=>downloadHTML());
+
+function setPlayerNameUI(){ document.getElementById('playerName').textContent = state.nickname || 'Guest'; document.getElementById('balance').textContent = state.balance.toFixed(2); }
+setPlayerNameUI();
+
+// ----------------- Views -----------------
+function showView(view){
+  state.currentView = view;
+  setPlayerNameUI();
+  const left = document.getElementById('leftContent');
+  const main = document.getElementById('mainContent');
+  left.innerHTML = ''; main.innerHTML = '';
+
+  if(view==='signup') return renderSignup(left, main);
+  if(view==='lobby') return renderLobby(left, main);
+  if(view==='bomb') return renderBomb(left, main);
+  if(view==='plinko') return renderPlinko(left, main);
+}
+
+function renderSignup(left, main){
+  const wrap = document.createElement('div');
+  wrap.className='center';
+  wrap.innerHTML = `
+    <h1>Welcome!</h1>
+    <div class="muted">Enter a nickname (like Slither.io) and press Play</div>
+    <input id="nickInput" type="text" placeholder="Nickname" style="margin-top:12px"/>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button id="playBtn">Play</button>
+      <button id="guestBtn" class="ghost">Continue as Guest</button>
+    </div>`;
+  left.appendChild(wrap);
+  document.getElementById('nickInput').value = state.nickname;
+  document.getElementById('playBtn').addEventListener('click', ()=>{
+    const v = document.getElementById('nickInput').value.trim();
+    if(v.length===0){ alert('Please enter a nickname or use Guest.'); return; }
+    state.nickname = v; saveState(); log('Signed in as ' + state.nickname); showView('lobby');
+  });
+  document.getElementById('guestBtn').addEventListener('click', ()=>{ state.nickname='Guest'; saveState(); log('Playing as Guest'); showView('lobby'); });
+}
+
+function renderLobby(left, main){
+  left.innerHTML = `
+    <h1>Lobby</h1>
+    <div class="muted">Choose a game to play</div>
+    <div style="margin-top:12px">
+      <div style="font-size:13px;margin-bottom:6px">Quick balance controls</div>
+      <div style="display:flex;gap:8px">
+        <button id="add10" class="ghost">+10</button>
+        <button id="add50" class="ghost">+50</button>
+        <button id="resetBal" class="ghost">Reset Balance</button>
+      </div>
+    </div>`;
+  const games = document.createElement('div'); games.className='games'; games.style.marginTop='12px';
+  const bombCard = document.createElement('div'); bombCard.className='game-card'; bombCard.innerHTML='<strong>Bomb Casino</strong><div class=\"muted\">Mines-like — pick safe tiles</div>'; bombCard.addEventListener('click', ()=>showView('bomb'));
+  const plinkoCard = document.createElement('div'); plinkoCard.className='game-card'; plinkoCard.innerHTML='<strong>Plinko</strong><div class=\"muted\">Drop a ball and win multipliers</div>'; plinkoCard.addEventListener('click', ()=>showView('plinko'));
+  games.appendChild(bombCard); games.appendChild(plinkoCard); left.appendChild(games);
+
+  // balance controls
+  document.getElementById('add10').addEventListener('click', ()=>{ state.balance+=10; saveState(); setPlayerNameUI(); log('+10 added'); });
+  document.getElementById('add50').addEventListener('click', ()=>{ state.balance+=50; saveState(); setPlayerNameUI(); log('+50 added'); });
+  document.getElementById('resetBal').addEventListener('click', ()=>{ if(confirm('Reset balance to 100?')){ state.balance=100; saveState(); setPlayerNameUI(); log('Balance reset'); } });
+
+  // main: lobby graphic
+  main.innerHTML = `<div class="center"><h1>Mini Casino</h1><div class="muted">Welcome, ${state.nickname||'Guest'}. Choose a game on the left.</div></div>`;
+}
+
+//
+// ----------------- Bomb Casino (reused & integrated) -----------------
+//
+function renderBomb(left, main){
+  // left controls (bet, bombs, start, cashout)
+  left.innerHTML = `
+    <h1>Bomb Casino</h1>
+    <label class="muted">Bet amount</label><input id="bet" type="number" min="0.01" step="0.01" value="1.00"/>
+    <label class="muted">Bombs</label><select id="bombs"></select>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button id="startBtn">Start Round</button>
+      <button id="randomPick" class="ghost">Pick Random</button>
+      <button id="cashout" class="ghost">Cashout</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <div class="muted">Tiles: <strong>${tiles}</strong></div>
+      <div class="muted">Bombs: <strong id="bombCount">1</strong></div>
+      <div class="muted">Revealed: <strong id="revealedCount">0</strong></div>
+    </div>`;
+
+  for(let i=1;i<tiles;i++){ const opt=document.createElement('option');opt.value=i;opt.textContent=i; left.querySelector('#bombs').appendChild(opt); }
+
+  // main board
+  main.innerHTML = `<h1>Board</h1><div class="board" id="board"></div>`;
+  // state
+  state.bombState = {
+    roundActive:false, bet:1.00, bombs:1, bombPositions:[], revealed:new Set(), multiplier:1.0, potential:0.0, tilesRemaining:tiles
+  };
+  setBombUIElements();
+  renderBombBoard();
+
+  function setBombUIElements(){
+    left.querySelector('#bombs').value = state.bombState.bombs;
+    left.querySelector('#bombs').addEventListener('change', ()=>{ state.bombState.bombs = parseInt(left.querySelector('#bombs').value,10); document.getElementById('bombCount').textContent = state.bombState.bombs; });
+    left.querySelector('#bet').addEventListener('change', ()=>{ state.bombState.bet = parseFloat(left.querySelector('#bet').value); });
+    left.querySelector('#startBtn').addEventListener('click', startRound);
+    left.querySelector('#randomPick').addEventListener('click', pickRandom);
+    left.querySelector('#cashout').addEventListener('click', cashout);
+  }
+
+  function placeBombs(bombs){
+    const positions=new Set();
+    while(positions.size < bombs){ positions.add(randInt(tiles)); }
+    return [...positions];
+  }
+
+  function startRound(){
+    if(state.bombState.roundActive){ log('Round already active'); return; }
+    const bet = parseFloat(left.querySelector('#bet').value) || 1.0;
+    if(bet <= 0 || bet > state.balance){ alert('Invalid bet or insufficient balance'); return; }
+    state.bombState.bet = Math.round(bet*100)/100;
+    state.bombState.bombs = parseInt(left.querySelector('#bombs').value,10);
+    state.bombState.bombPositions = placeBombs(state.bombState.bombs);
+    state.bombState.revealed = new Set();
+    state.bombState.roundActive = true;
+    state.bombState.multiplier = 1.0;
+    state.bombState.tilesRemaining = tiles;
+    state.bombState.potential = 0.0;
+    state.balance = Math.round((state.balance - state.bombState.bet)*100)/100;
+    saveState(); setPlayerNameUI();
+    renderBombBoard(); log('Started Bomb round — bet ' + state.bombState.bet);
+  }
+
+  function renderBombBoard(){
+    const boardEl = document.getElementById('board');
+    boardEl.innerHTML = '';
+    for(let i=0;i<tiles;i++){
+      const cell=document.createElement('div'); cell.className='tile'; cell.dataset.idx=i;
+      if(state.bombState.revealed.has(i)){
+        cell.classList.add('revealed');
+        if(state.bombState.bombPositions.includes(i)){ cell.classList.add('bomb'); cell.textContent='💣'; }
+        else { cell.classList.add('safe'); cell.textContent='💎'; }
+      }
+      cell.addEventListener('click', ()=>onPick(i));
+      boardEl.appendChild(cell);
+    }
+    document.getElementById('bombCount').textContent = state.bombState.bombs;
+    document.getElementById('revealedCount').textContent = state.bombState.revealed.size;
+  }
+
+  function onPick(i){
+    if(!state.bombState.roundActive){ log('No active round — press Start'); return; }
+    if(state.bombState.revealed.has(i)) return;
+    state.bombState.revealed.add(i);
+    if(state.bombState.bombPositions.includes(i)){
+      state.bombState.roundActive = false;
+      revealAll();
+      renderBombBoard();
+      log('BOOM! You hit a bomb. Lost ' + state.bombState.bet.toFixed(2));
+    } else {
+      state.bombState.tilesRemaining--;
+      updateMultiplier();
+      updatePotential();
+      renderBombBoard();
+      log('Safe pick — Potential: ' + state.bombState.potential.toFixed(2));
+    }
+  }
+
+  function revealAll(){ for(let i=0;i<tiles;i++) state.bombState.revealed.add(i); }
+
+  function updateMultiplier(){
+    const revealedSafeCount = state.bombState.revealed.size - state.bombState.bombPositions.filter(p=>state.bombState.revealed.has(p)).length;
+    let m = 1.0;
+    for(let k=0;k<revealedSafeCount;k++){ m *= tiles / (tiles - state.bombState.bombs - k); }
+    m *= 0.99; state.bombState.multiplier = m;
+  }
+
+  function updatePotential(){ state.bombState.potential = Math.round(state.bombState.bet * state.bombState.multiplier * 100)/100; }
+
+  function cashout(){
+    if(!state.bombState.roundActive){ log('Nothing to cashout'); return; }
+    updateMultiplier(); updatePotential();
+    const win = state.bombState.potential;
+    state.balance = Math.round((state.balance + win)*100)/100;
+    state.bombState.roundActive = false;
+    revealAll(); renderBombBoard(); saveState(); setPlayerNameUI();
+    log('Cashed out ' + win.toFixed(2));
+  }
+
+  function pickRandom(){
+    if(!state.bombState.roundActive){ log('No active round'); return; }
+    const choices = []; for(let i=0;i<tiles;i++) if(!state.bombState.revealed.has(i)) choices.push(i);
+    if(choices.length===0) return;
+    const idx = choices[randInt(choices.length)]; onPick(idx);
+  }
+}
+
+// ----------------- Plinko -----------------
+function renderPlinko(left, main){
+  left.innerHTML = `
+    <h1>Plinko</h1>
+    <label class="muted">Bet</label><input id="pbet" type="number" min="0.01" step="0.01" value="1.00"/>
+    <label class="muted">Rows (2-10)</label><select id="prows"></select>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button id="dropBtn">Drop Ball</button>
+      <button id="autoplay" class="ghost">Auto x10</button>
+    </div>
+    <div style="margin-top:10px" id="pinfo"></div>`;
+
+  const rowsSel = left.querySelector('#prows');
+  for(let r=2;r<=10;r++){ const o=document.createElement('option'); o.value=r; o.textContent=r; rowsSel.appendChild(o); }
+  left.querySelector('#pbet').addEventListener('change', ()=>{});
+  left.querySelector('#dropBtn').addEventListener('click', ()=>startPlinko(false));
+  left.querySelector('#autoplay').addEventListener('click', ()=>startPlinko(true));
+
+  main.innerHTML = `<h1>Plinko Board</h1><canvas id="plinkoCanvas" width="720" height="520"></canvas><div id="presults" style="margin-top:10px"></div>`;
+  state.plinkoState = { running:false };
+
+  // draw & logic
+  const canvas = document.getElementById('plinkoCanvas'); const ctx = canvas.getContext('2d');
+
+  function drawBoard(rows){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    // pegs
+    const cols = rows + 1;
+    const top = 60; const leftMargin = 60; const rightMargin = canvas.width - 60;
+    const width = rightMargin - leftMargin;
+    const pegSpacingX = width / (cols - 1);
+    const rowSpacing = (canvas.height - 160) / (rows - 1);
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    for(let r=0;r<rows;r++){
+      for(let c=0;c<cols - (r%2);c++){
+        const x = leftMargin + (r%2 ? pegSpacingX/2 : 0) + c*pegSpacingX;
+        const y = top + r*rowSpacing;
+        ctx.beginPath(); ctx.arc(x,y,6,0,Math.PI*2); ctx.fill();
+      }
+    }
+    // slots at bottom
+    const slots = rows+1; const slotW = width/slots;
+    for(let s=0;s<slots;s++){
+      const x = leftMargin + s*slotW; ctx.strokeStyle='rgba(255,255,255,0.04)'; ctx.beginPath(); ctx.moveTo(x,canvas.height-60); ctx.lineTo(x,canvas.height-30); ctx.stroke();
+    }
+  }
+
+  function startPlinko(autoplay){
+    if(state.plinkoState.running) return;
+    const bet = parseFloat(left.querySelector('#pbet').value) || 1.0;
+    const rows = parseInt(left.querySelector('#prows').value,10) || 6;
+    if(bet <=0 || bet > state.balance){ alert('Invalid bet or insufficient balance'); return; }
+    state.plinkoState.running = true;
+    state.balance = Math.round((state.balance - bet)*100)/100; saveState(); setPlayerNameUI();
+    log('Plinko: dropped bet ' + bet.toFixed(2) + ' rows ' + rows);
+    // simulate paths: we treat ball falling row by row choosing left/right with 50/50 at each peg
+    // compute final slot by number of rights among rows (binomial). We'll animate a path stepping left/right.
+    const path = [];
+    let position = 0; // position measured as integer; will compute final slot index
+    // We'll compute slots count = rows+1. Equivalent to number of rights chosen among rows.
+    let rights = 0;
+    for(let r=0;r<rows;r++){
+      const choice = randInt(2); if(choice===1){ rights++; path.push('R'); } else { path.push('L'); }
+    }
+    const slot = rights; // slot index 0..rows
+    // multipliers: simple symmetric payoff: center higher, edges lower. Define base mapping
+    const multipliers = computeMultipliers(rows);
+    const multiplier = multipliers[slot] || 0;
+    const win = Math.round(bet * multiplier * 100)/100;
+
+    // animate dropping ball along pegs
+    animatePlinko(path, rows, ()=>{
+      if(win>0){ state.balance = Math.round((state.balance + win)*100)/100; saveState(); setPlayerNameUI(); }
+      document.getElementById('presults').innerHTML = `Landed in slot ${slot} — Multiplier: ${multiplier.toFixed(2)}x — Win: ${win.toFixed(2)}`;
+      log('Plinko result: slot ' + slot + ' multiplier ' + multiplier.toFixed(2) + ' win ' + win.toFixed(2));
+      state.plinkoState.running = false;
+      if(autoplay){
+        setTimeout(()=>{ if(state.balance >= bet) startPlinko(true); else log('Autoplay stopped — insufficient funds'); }, 400);
+      }
+    });
+    drawBoard(rows);
+  }
+
+  function computeMultipliers(rows){
+    // create an array length rows+1, with centered higher multipliers.
+    // base: edges 0.5x, center up to 5x for many rows. Normalize so expected value < 1 (house edge)
+    const slots = rows+1; const arr = new Array(slots).fill(0);
+    // compute binomial weights to shape multipliers
+    const weights = [];
+    for(let k=0;k<slots;k++){ weights.push(binomialProb(rows,k)); }
+    // assign raw multipliers inversely proportional to weight, scaled so house edge ~0.98
+    const inv = weights.map(w => 1/(w + 1e-9));
+    const sumInv = inv.reduce((a,b)=>a+b,0);
+    // scale factor so expected payout = 0.97 (house keeps 3%)
+    const desiredEV = 0.97;
+    const scale = desiredEV / weights.map((w,i)=>w* (inv[i]/sumInv)).reduce((a,b)=>a+b,0);
+    for(let i=0;i<slots;i++){ arr[i] = Math.max(0.1, inv[i]/sumInv * scale * slots); }
+    return arr;
+  }
+
+  function binomialProb(n,k){
+    // compute binomial probability (1/2)^n * C(n,k)
+    let c=1;
+    for(let i=1;i<=k;i++){ c = c * (n - (k - i)) / i; }
+    return c * Math.pow(0.5, n);
+  }
+
+  function animatePlinko(path, rows, done){
+    const ctx = canvas.getContext('2d');
+    const top = 60; const leftMargin = 60; const rightMargin = canvas.width - 60; const width = rightMargin - leftMargin;
+    const cols = rows + 1; const pegSpacingX = width / (cols - 1); const rowSpacing = (canvas.height - 160) / (rows - 1);
+    // compute coordinates of pegs for each row and column index
+    const pegCoords = [];
+    for(let r=0;r<rows;r++){
+      const rowCoords = [];
+      const colsThis = cols - (r%2);
+      for(let c=0;c<colsThis;c++){
+        const x = leftMargin + (r%2 ? pegSpacingX/2 : 0) + c*pegSpacingX;
+        const y = top + r*rowSpacing;
+        rowCoords.push({x,y});
+      }
+      pegCoords.push(rowCoords);
+    }
+    // starting point above first row, at center-left for r%2 handling. We'll track a floating x index
+    let cx = canvas.width/2; let cy = top - 20;
+    const pathChoices = path.slice(); let step = 0;
+    const ballRadius = 8;
+    const framesPerStep = 18;
+    let frame = 0;
+    const anim = setInterval(()=>{
+      // clear & redraw board & ball
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      drawBoard(rows);
+      // compute target peg coords for current step
+      if(step < pathChoices.length){
+        const coords = pegCoords[step];
+        // choose index based on previous floating index; we'll approximate by picking nearest peg then offset to left/right
+        let nearestIdx = 0;
+        let minDist = 1e9;
+        for(let j=0;j<coords.length;j++){ const d = Math.abs(coords[j].x - cx); if(d<minDist){minDist=d; nearestIdx=j;} }
+        // target peg x
+        let tx = coords[Math.max(0, Math.min(coords.length-1, nearestIdx + (pathChoices[step]==='R'?1:0)))].x;
+        let ty = coords[Math.max(0, Math.min(coords.length-1, nearestIdx))].y;
+        // ease towards target
+        cx += (tx - cx) / (framesPerStep - frame);
+        cy += (ty - cy) / (framesPerStep - frame) + 2;
+      } else {
+        // final fall to bottom slot position determined by number of rights
+        const slot = pathChoices.filter(p=>p==='R').length;
+        const slots = rows+1; const slotW = width/slots;
+        const tx = leftMargin + slot*slotW + slotW/2;
+        const ty = canvas.height - 40;
+        cx += (tx - cx) / 10;
+        cy += (ty - cy) / 10;
+      }
+      // draw ball
+      ctx.beginPath(); ctx.fillStyle='white'; ctx.arc(cx, cy, ballRadius, 0, Math.PI*2); ctx.fill();
+      frame++;
+      // advance steps
+      if(frame >= framesPerStep && step < pathChoices.length){ frame = 0; step++; }
+      // end when close to bottom
+      if(step >= pathChoices.length && Math.abs(cy - (canvas.height - 40)) < 2){
+        clearInterval(anim); setTimeout(done, 300);
+      }
+    }, 30);
+  }
+
+  drawBoard(6); // default preview
+}
+
+// ----------------- Helpers -----------------
+function downloadHTML(){
+  // create blob from current HTML (reconstruct using document.documentElement.outerHTML)
+  const html = document.documentElement.outerHTML;
+  const blob = new Blob([html], {type:'text/html'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'mini_casino.html'; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); },1000);
+}
+
+// ----------------- Start -----------------
+if(!state.nickname) showView('signup'); else showView('lobby');
+log('App loaded'); setPlayerNameUI();
+
+</script>
+</body>
+</html>
